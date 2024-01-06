@@ -28,6 +28,9 @@ protected:
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "FootStep", meta = (Categories = "ContextEffect"))
 	FGameplayTag EffectTag;
 
+	UPROPERTY(AdvancedDisplay, EditAnywhere, Category = "PreviewProperties", meta = (EditCondition = "bPreviewInEditor"))
+	bool bPhysicalSurfaceAsContext;
+
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "FootStep|Trace")
 	TEnumAsByte<ECollisionChannel> TraceChannel;
 
@@ -53,9 +56,6 @@ protected:
 	bool bPreviewInEditor;
 
 	UPROPERTY(EditAnywhere, Category = "PreviewProperties", meta = (EditCondition = "bPreviewInEditor"))
-	bool bPreviewPhysicalSurfaceAsContext;
-
-	UPROPERTY(EditAnywhere, Category = "PreviewProperties", meta = (EditCondition = "bPreviewInEditor && bPreviewPhysicalSurfaceAsContext"))
 	TEnumAsByte<EPhysicalSurface> PreviewPhysicalSurface;
 
 	UPROPERTY(EditAnywhere, Category = "PreviewProperties", meta = (AllowedClasses = "/Script/LyraGame.LyraContextEffectsLibrary", EditCondition = "bPreviewInEditor"))
@@ -64,7 +64,7 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "PreviewProperties", meta = (EditCondition = "bPreviewInEditor"))
 	FGameplayTagContainer PreviewContexts;
 
-#endif
+#endif // WITH_EDITORONLY_DATA
 
 public:
 	virtual FString GetNotifyName_Implementation() const override;
@@ -73,5 +73,14 @@ public:
 		USkeletalMeshComponent* MeshComp, 
 		UAnimSequenceBase* Animation,
 		const FAnimNotifyEventReference& EventReference) override;
+
+protected:
+	void TryPlayFootStepEffect(USkeletalMeshComponent* MeshComp);
+
+#if WITH_EDITORONLY_DATA
+
+	void TryPlayFootStepEffect_EditorPreview(USkeletalMeshComponent* MeshComp);
+
+#endif // WITH_EDITORONLY_DATA
 
 };

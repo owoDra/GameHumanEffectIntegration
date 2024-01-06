@@ -4,6 +4,10 @@
 
 // This Plugin
 #include "GameplayTag/GHFXITags_ContextEffect.h"
+#include "GHFXIntgLogs.h"
+
+// Game Chracter Extension
+#include "CharacterMeshAccessorInterface.h"
 
 // Game Effect Extesnion
 #include "ContextEffectComponent.h"
@@ -22,6 +26,7 @@
 
 // Game Effect Extesnion
 #include "ContextEffectLibrary.h"
+#include "ActiveContextEffectLibrary.h"
 
 // Engine Features
 #include "Sound/SoundBase.h"
@@ -39,9 +44,10 @@ UAnimNotify_HumanFootStep::UAnimNotify_HumanFootStep(const FObjectInitializer& O
 {
 	bIsLeftFoot = false;
 	EffectTag = TAG_ContextEffect_FootStep;
+	bPhysicalSurfaceAsContext = true;
 	TraceChannel = ECollisionChannel::ECC_Visibility;
-	TraceStartOffset = FVector(0.0, 0.0, 4.0);
-	TraceEndOffset = FVector(0.0, 0.0, -8.0);
+	TraceStartOffset = FVector(0.0, 0.0, 5.0);
+	TraceEndOffset = FVector(0.0, 0.0, -20.0);
 	VFXScale = FVector::OneVector;
 	VolumeMultiplier = 1.0f;
 	PitchMultiplier = 1.0f;
@@ -49,10 +55,9 @@ UAnimNotify_HumanFootStep::UAnimNotify_HumanFootStep(const FObjectInitializer& O
 #if WITH_EDITORONLY_DATA
 
 	bPreviewInEditor = false;
-	bPreviewPhysicalSurfaceAsContext = true;
 	PreviewPhysicalSurface = EPhysicalSurface::SurfaceType_Default;
 
-#endif
+#endif // WITH_EDITORONLY_DATA
 }
 
 
@@ -65,18 +70,52 @@ void UAnimNotify_HumanFootStep::Notify(USkeletalMeshComponent* MeshComp, UAnimSe
 {
 	Super::Notify(MeshComp, Animation, EventReference);
 
+#if WITH_EDITORONLY_DATA
+
+	if (auto* World{ MeshComp->GetWorld() })
+	{
+		if (World->WorldType == EWorldType::EditorPreview)
+		{
+			TryPlayFootStepEffect_EditorPreview(MeshComp);
+		}
+		else
+		{
+			TryPlayFootStepEffect(MeshComp);
+		}
+	}
+
+#else
+
+	TryPlayFootStepEffect(MeshComp);
+
+#endif // WITH_EDITORONLY_DATA
+}
+
+void UAnimNotify_HumanFootStep::TryPlayFootStepEffect(USkeletalMeshComponent* MeshComp)
+{
 	if (auto* OwningActor{ MeshComp ? MeshComp->GetOwner() : nullptr})
 	{
-		const auto BoneName{ bIsLeftFoot ? ULocomotionHumanNameStatics::FootLeftBoneName() : ULocomotionHumanNameStatics::FootRightBoneName() };
-		const auto FootPos{ MeshComp->GetSocketLocation(BoneName) };
+		// If is not main mesh, skip
+
+		if (OwningActor->Implements<UCharacterMeshAccessorInterface>())
+		{
+			if (MeshComp != ICharacterMeshAccessorInterface::Execute_GetMainMesh(OwningActor))
+			{
+				return;
+			}
+		}
 
 		// Prepare Line Trace
+
+		const auto BoneName{ bIsLeftFoot ? ULocomotionHumanNameStatics::FootLeftBoneName() : ULocomotionHumanNameStatics::FootRightBoneName() };
+		const auto FootPos{ MeshComp->GetSocketLocation(BoneName) };
 
 		const auto TraceStart{ FootPos + TraceStartOffset };
 		const auto TraceEnd{ FootPos + TraceEndOffset };
 
 		auto QueryParams{ FCollisionQueryParams() };
 		QueryParams.AddIgnoredActor(OwningActor);
+		QueryParams.bReturnPhysicalMaterial = true;
 
 		auto HitResult{ FHitResult(0) };
 
@@ -88,147 +127,93 @@ void UAnimNotify_HumanFootStep::Notify(USkeletalMeshComponent* MeshComp, UAnimSe
 			World ? World->LineTraceSingleByChannel(HitResult, TraceStart, TraceEnd, TraceChannel, QueryParams, FCollisionResponseParams::DefaultResponseParam) : false
 		};
 
-		// Find Context Effect Implementing Object
-
-		UObject* ContextEffectImplementingObject{ nullptr };
-
-		if (OwningActor->Implements<UContextEffectInterface>())
+		if (bHitSuccess)
 		{
-			ContextEffectImplementingObject = OwningActor;
-		}
-		else
-		{
-			ContextEffectImplementingObject = OwningActor->FindComponentByClass<UContextEffectComponent>();
-		}
+			// Convert PhysicalSurface to Context
 
-		// Call Context Effect Action
+			auto Contexts{ FGameplayTagContainer::EmptyContainer };
 
-		if (ContextEffectImplementingObject)
-		{
-			FContextEffectGenericParameter Pram;
-			Pram.AudioPitch = PitchMultiplier;
-			Pram.AudioVolume = VolumeMultiplier;
-			Pram.bHitSuccess = bHitSuccess;
-			Pram.Bone = BoneName;
-			Pram.Component = MeshComp;
-			Pram.Contexts = FGameplayTagContainer::EmptyContainer;
-			Pram.EffectTag = EffectTag;
-			Pram.HitResult = HitResult;
-			Pram.LocationOffset = FVector::ZeroVector;
-			Pram.RotationOffset = FRotator::ZeroRotator;
-			Pram.VFXScale = VFXScale;
-
-			IContextEffectInterface::Execute_ContextEffectAction(ContextEffectImplementingObject, Pram);
-		}
-
-#if WITH_EDITORONLY_DATA
-		// This is for Anim Editor previewing, it is a deconstruction of the calls made by the Interface and the Subsystem
-
-		if (bPreviewInEditor)
-		{
-			// Get the world, make sure it's an Editor Preview World
-
-			if (World && World->WorldType == EWorldType::EditorPreview)
+			if (bPhysicalSurfaceAsContext)
 			{
-				// Add Preview contexts if necessary
-				
-				auto Contexts{ PreviewContexts };
+				GetDefault<UEffectDeveloperSettings>()->ConvertHitResultToContext(HitResult, Contexts);
+			}
 
-				// Convert given Surface Type to Context and Add it to the Contexts for this Preview
+			// Find Context Effect Implementing Object
 
-				if (bPreviewPhysicalSurfaceAsContext)
-				{
-					auto PhysicalSurfaceType{ PreviewPhysicalSurface };
+			UObject* ContextEffectImplementingObject{ nullptr };
 
-					const auto* DevSettings{ GetDefault<UEffectDeveloperSettings>() };
+			if (OwningActor->Implements<UContextEffectInterface>())
+			{
+				ContextEffectImplementingObject = OwningActor;
+			}
+			else
+			{
+				ContextEffectImplementingObject = OwningActor->FindComponentByClass<UContextEffectComponent>();
+			}
 
-					if (const auto* FoundSurfaceContext{ DevSettings->SurfaceTypeToContextMap.Find(PhysicalSurfaceType) })
-					{
-						auto SurfaceContext{ *FoundSurfaceContext };
+			// Call Context Effect Action
 
-						Contexts.AddTag(SurfaceContext);
-					}
-				}
-
-				// Libraries are soft referenced, so you will want to try to load them now
-			
-				if (auto* EffectsLibrariesObj{ PreviewContextEffectsLibrary.TryLoad() })
-				{
-					// Check if it is in fact a ULyraContextEffectLibrary type
-
-					if (auto* EffectLibrary{ Cast<UContextEffectLibrary>(EffectsLibrariesObj) })
-					{
-						// Prepare Sounds and Niagara System Arrays
-
-						TArray<USoundBase*> TotalSounds;
-						TArray<UNiagaraSystem*> TotalNiagaraSystems;
-
-						// Attempt to load the Effect Library content (will cache in Transient data on the Effect Library Asset)
-
-						EffectLibrary->LoadEffects();
-
-						// If the Effect Library is valid and marked as Loaded, Get Effects from it
-
-						if (EffectLibrary && EffectLibrary->GetContextEffectLibraryLoadState() == EContextEffectLibraryLoadState::Loaded)
-						{
-							// Prepare local arrays
-
-							TArray<USoundBase*> Sounds;
-							TArray<UNiagaraSystem*> NiagaraSystems;
-
-							// Get the Effects
-
-							EffectLibrary->GetEffects(EffectTag, Contexts, Sounds, NiagaraSystems);
-
-							// Append to the accumulating arrays
-
-							TotalSounds.Append(Sounds);
-							TotalNiagaraSystems.Append(NiagaraSystems);
-						}
-
-						// Cycle through Sounds and call Spawn Sound Attached, passing in relevant data
-
-						for (auto Sound : TotalSounds)
-						{
-							UGameplayStatics::SpawnSoundAttached(
-								Sound, 
-								MeshComp, 
-								BoneName, 
-								FVector::ZeroVector, 
-								FRotator::ZeroRotator, 
-								EAttachLocation::KeepRelativeOffset,
-								false, 
-								VolumeMultiplier, 
-								PitchMultiplier, 
-								0.0f, 
-								nullptr, 
-								nullptr, 
-								true);
-						}
-
-						// Cycle through Niagara Systems and call Spawn System Attached, passing in relevant data
-
-						for (auto NiagaraSystem : TotalNiagaraSystems)
-						{
-							UNiagaraFunctionLibrary::SpawnSystemAttached(
-								NiagaraSystem, 
-								MeshComp, 
-								BoneName, 
-								FVector::ZeroVector,
-								FRotator::ZeroRotator, 
-								VFXScale, 
-								EAttachLocation::KeepRelativeOffset, 
-								true,
-								ENCPoolMethod::None, 
-								true, 
-								true);
-						}
-					}
-				}
-
+			if (ContextEffectImplementingObject)
+			{
+				IContextEffectInterface::Execute_PlayEffects(
+					ContextEffectImplementingObject
+					, EffectTag
+					, Contexts
+					, MeshComp
+					, BoneName
+					, FVector::ZeroVector
+					, FRotator::ZeroRotator
+					, EAttachLocation::KeepRelativeOffset
+					, VolumeMultiplier
+					, PitchMultiplier
+					, VFXScale
+				);
 			}
 		}
-#endif
-
 	}
 }
+
+#if WITH_EDITORONLY_DATA
+
+void UAnimNotify_HumanFootStep::TryPlayFootStepEffect_EditorPreview(USkeletalMeshComponent* MeshComp)
+{
+	// Check if it is in fact a ULyraContextEffectLibrary type
+
+	if (const auto* EffectLibrary{ Cast<UContextEffectLibrary>(PreviewContextEffectsLibrary.TryLoad()) })
+	{
+		// Load Effects
+
+		auto* ActiveEffectLibrary{ NewObject<UActiveContextEffectLibrary>(this) };
+		ActiveEffectLibrary->LoadContextEffectLibrary(EffectLibrary);
+
+		// Cache Foot Pos
+
+		const auto BoneName{ bIsLeftFoot ? ULocomotionHumanNameStatics::FootLeftBoneName() : ULocomotionHumanNameStatics::FootRightBoneName() };
+		const auto FootPos{ MeshComp->GetSocketLocation(BoneName) };
+
+		// Convert PhysicalSurface to Context
+
+		auto Contexts{ FGameplayTagContainer::EmptyContainer };
+
+		if (bPhysicalSurfaceAsContext)
+		{
+			GetDefault<UEffectDeveloperSettings>()->ConvertPhysicalSurfaceToContext(PreviewPhysicalSurface, Contexts);
+		}
+
+		// Play Effect
+
+		ActiveEffectLibrary->PlayEffects(
+			Contexts
+			, MeshComp
+			, BoneName
+			, FVector::ZeroVector
+			, FRotator::ZeroRotator
+			, EAttachLocation::KeepRelativeOffset
+			, VolumeMultiplier
+			, PitchMultiplier
+			, VFXScale
+		);
+	}
+}
+
+#endif // WITH_EDITORONLY_DATA
