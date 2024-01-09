@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2023 owoDra
+﻿// Copyright (C) 2024 owoDra
 
 #include "GHFXITags_ContextEffect.h"
 
