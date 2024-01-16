@@ -36,7 +36,7 @@ public class GHFXIntg : ModuleRules
                 "GFCore",
                 "GCExt",
                 "GFXExt",
-                "GCLAddon",
+                "GLExt",
                 "GLHAddon",
             }
         );
