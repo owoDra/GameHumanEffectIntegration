@@ -7,7 +7,7 @@
 #include "GHFXIntgLogs.h"
 
 // Game Chracter Extension
-#include "CharacterMeshAccessorInterface.h"
+#include "Character/CharacterMeshAccessorInterface.h"
 
 // Game Effect Extesnion
 #include "ContextEffectComponent.h"
